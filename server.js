@@ -25,29 +25,51 @@ db.run(`CREATE TABLE IF NOT EXISTS users (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
 
+// Get REAL visitor IP from Render's proxy headers
 function getClientInfo(req) {
-  const forwardedChain = req.headers['x-forwarded-for'];
-  const realIp = forwardedChain ? forwardedChain.split(',')[0].trim() : 
-                 req.ip || req.socket?.remoteAddress || 'Unknown';
+  // Try ALL possible headers Render uses
+  let realIp = req.headers['x-forwarded-for'] 
+    ? req.headers['x-forwarded-for'].split(',')[0].trim()
+    : req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || 'Unknown';
+  
+  // Clean up — remove any extra spaces
+  realIp = realIp.trim();
+  
   const port = req.headers['x-forwarded-port'] || 
                req.headers['x-real-port'] ||
                req.socket?.remotePort || 'Unknown';
+  
   return { ip: realIp, port };
 }
 
 async function getLocation(ip) {
-  if (!ip || ip === 'Unknown' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
+  if (!ip || ip === 'Unknown' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.') || ip === '::1') {
     return { city: 'Unknown', country: 'Unknown' };
   }
   try {
-    const res = await fetch(`https://ipapi.co/${ip}/json/`, { timeout: 10000 });
-    if (!res.ok) return { city: 'Unknown', country: 'Unknown' };
-    const d = await res.json();
-    if (d.error) return { city: 'Unknown', country: 'Unknown' };
-    return {
-      city: d.city || 'Unknown',
-      country: d.country_name || d.country || 'Unknown'
-    };
+    // Try TWO services — if one fails, the other might work
+    let res = await fetch(`https://ipapi.co/${ip}/json/`, { timeout: 8000 });
+    if (res.ok) {
+      const d = await res.json();
+      if (!d.error) {
+        return {
+          city: d.city || 'Unknown',
+          country: d.country_name || d.country || 'Unknown'
+        };
+      }
+    }
+    // Fallback service
+    res = await fetch(`https://ipwhois.app/json/${ip}`, { timeout: 8000 });
+    if (res.ok) {
+      const d = await res.json();
+      if (d.success !== false) {
+        return {
+          city: d.city || 'Unknown',
+          country: d.country || 'Unknown'
+        };
+      }
+    }
+    return { city: 'Unknown', country: 'Unknown' };
   } catch {
     return { city: 'Unknown', country: 'Unknown' };
   }
@@ -89,4 +111,4 @@ app.post('/api/admin-users', (req, res) => {
   );
 });
 
-app.listen(PORT, () => console.log('✅ Running — real IP + location tracking'));
+app.listen(PORT, () => console.log('✅ Running — dual IP + location lookup'));
