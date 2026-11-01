@@ -26,22 +26,24 @@ db.run(`CREATE TABLE IF NOT EXISTS users (
 )`);
 
 function getClientInfo(req) {
-  const forwarded = req.headers['x-forwarded-for'];
-  const ip = forwarded ? forwarded.split(',')[0].trim() : 
-             req.ip || req.socket?.remoteAddress || 'Unknown';
+  const forwardedChain = req.headers['x-forwarded-for'];
+  const realIp = forwardedChain ? forwardedChain.split(',')[0].trim() : 
+                 req.ip || req.socket?.remoteAddress || 'Unknown';
   const port = req.headers['x-forwarded-port'] || 
+               req.headers['x-real-port'] ||
                req.socket?.remotePort || 'Unknown';
-  return { ip, port };
+  return { ip: realIp, port };
 }
 
 async function getLocation(ip) {
-  if (!ip || ip === 'Unknown' || ip.startsWith('192.168.') || ip.startsWith('127.')) {
+  if (!ip || ip === 'Unknown' || ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.')) {
     return { city: 'Unknown', country: 'Unknown' };
   }
   try {
-    const res = await fetch(`https://ipapi.co/${ip}/json/`, { timeout: 8000 });
+    const res = await fetch(`https://ipapi.co/${ip}/json/`, { timeout: 10000 });
     if (!res.ok) return { city: 'Unknown', country: 'Unknown' };
     const d = await res.json();
+    if (d.error) return { city: 'Unknown', country: 'Unknown' };
     return {
       city: d.city || 'Unknown',
       country: d.country_name || d.country || 'Unknown'
@@ -87,4 +89,4 @@ app.post('/api/admin-users', (req, res) => {
   );
 });
 
-app.listen(PORT, () => console.log('✅ Backend running — port + location tracking enabled'));
+app.listen(PORT, () => console.log('✅ Running — real IP + location tracking'));
