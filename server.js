@@ -6,6 +6,35 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const ADMIN_CODE = 'imageturip3859';
 
+// ==============================================
+// 🚫 YOUR BLOCKED IP LIST — ADD IPS HERE
+// ==============================================
+const BLOCKED_IPS = new Set([
+  '84.66.100.154',
+  '86.144.59.111'
+  // ↓ ADD MORE HERE LIKE: '123.45.67.89',
+]);
+
+// Middleware — block them BEFORE they do anything
+app.use((req, res, next) => {
+  const forwarded = req.headers['x-forwarded-for'];
+  const clientIp = forwarded ? forwarded.split(',')[0].trim() : 
+                   req.ip || req.socket?.remoteAddress || 'Unknown';
+  
+  if (BLOCKED_IPS.has(clientIp)) {
+    console.log(`🚫 BLOCKED IP: ${clientIp}`);
+    return res.status(403).send(`
+      <html style="background:#0a0a1f;color:white;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;text-align:center">
+        <div>
+          <h1 style="color:#ef4444">🔒 Access Denied</h1>
+          <p>Your device has been blocked.</p>
+        </div>
+      </html>
+    `);
+  }
+  next();
+});
+
 app.use(cors());
 app.use(express.json());
 
@@ -25,20 +54,13 @@ db.run(`CREATE TABLE IF NOT EXISTS users (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 )`);
 
-// Get REAL visitor IP from Render's proxy headers
 function getClientInfo(req) {
-  // Try ALL possible headers Render uses
-  let realIp = req.headers['x-forwarded-for'] 
-    ? req.headers['x-forwarded-for'].split(',')[0].trim()
-    : req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || 'Unknown';
-  
-  // Clean up — remove any extra spaces
-  realIp = realIp.trim();
-  
+  const forwardedChain = req.headers['x-forwarded-for'];
+  const realIp = forwardedChain ? forwardedChain.split(',')[0].trim() : 
+                 req.headers['x-real-ip'] || req.ip || req.socket?.remoteAddress || 'Unknown';
   const port = req.headers['x-forwarded-port'] || 
                req.headers['x-real-port'] ||
                req.socket?.remotePort || 'Unknown';
-  
   return { ip: realIp, port };
 }
 
@@ -47,27 +69,15 @@ async function getLocation(ip) {
     return { city: 'Unknown', country: 'Unknown' };
   }
   try {
-    // Try TWO services — if one fails, the other might work
     let res = await fetch(`https://ipapi.co/${ip}/json/`, { timeout: 8000 });
     if (res.ok) {
       const d = await res.json();
-      if (!d.error) {
-        return {
-          city: d.city || 'Unknown',
-          country: d.country_name || d.country || 'Unknown'
-        };
-      }
+      if (!d.error) return { city: d.city || 'Unknown', country: d.country_name || d.country || 'Unknown' };
     }
-    // Fallback service
     res = await fetch(`https://ipwhois.app/json/${ip}`, { timeout: 8000 });
     if (res.ok) {
       const d = await res.json();
-      if (d.success !== false) {
-        return {
-          city: d.city || 'Unknown',
-          country: d.country || 'Unknown'
-        };
-      }
+      if (d.success !== false) return { city: d.city || 'Unknown', country: d.country || 'Unknown' };
     }
     return { city: 'Unknown', country: 'Unknown' };
   } catch {
@@ -78,10 +88,8 @@ async function getLocation(ip) {
 app.post('/api/register', async (req, res) => {
   const { username, password, consent } = req.body;
   if (!consent) return res.status(403).json({ error: 'Must agree to data collection' });
-  
   const { ip, port } = getClientInfo(req);
   const { city, country } = await getLocation(ip);
-  
   db.run(
     `INSERT INTO users (username,password,signup_ip,signup_port,signup_city,signup_country,last_login_ip,last_login_port,last_login_city,last_login_country) VALUES (?,?,?,?,?,?,?,?,?,?)`,
     [username, password, ip, port, city, country, ip, port, city, country],
@@ -93,13 +101,10 @@ app.post('/api/login', async (req, res) => {
   const { username, password } = req.body;
   const { ip, port } = getClientInfo(req);
   const { city, country } = await getLocation(ip);
-  
   db.get(`SELECT * FROM users WHERE username=? AND password=?`, [username, password], (err, user) => {
     if (!user) return res.status(401).json({ error: 'Wrong login' });
-    db.run(
-      `UPDATE users SET last_login_ip=?,last_login_port=?,last_login_city=?,last_login_country=? WHERE id=?`,
-      [ip, port, city, country, user.id],
-      () => res.json({ success: true, username })
+    db.run(`UPDATE users SET last_login_ip=?,last_login_port=?,last_login_city=?,last_login_country=? WHERE id=?`,
+      [ip, port, city, country, user.id], () => res.json({ success: true, username })
     );
   });
 });
@@ -111,4 +116,4 @@ app.post('/api/admin-users', (req, res) => {
   );
 });
 
-app.listen(PORT, () => console.log('✅ Running — dual IP + location lookup'));
+app.listen(PORT, () => console.log('✅ Running — IP block active'));
